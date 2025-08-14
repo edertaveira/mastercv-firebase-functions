@@ -1,0 +1,129 @@
+import * as functions from "firebase-functions/v2";
+import { FieldValue } from "firebase-admin/firestore";
+import { model } from "../config/gemini";
+import { debitUserCredit } from "../utils/credit";
+import { LinkedInRawData, LinkedInAnalysisFeedback, GeminiResult } from "../types";
+
+const { logger, firestore } = functions;
+const { onDocumentWritten } = firestore;
+
+const LINKEDIN_ANALYSIS_PRICE = 3;
+
+function analyzeProfilePicture(linkedInData: LinkedInRawData) {
+  const hasProfilePicture = !!(
+    linkedInData?.profileUrl ||
+    linkedInData?.photoUrl ||
+    linkedInData?.profilePicture ||
+    linkedInData?.profilePictureUrl
+  );
+  return { hasProfilePicture };
+}
+
+export const linkedinAnalysisProcessor = onDocumentWritten(
+  "linkedin-analysis/{id}",
+  async (event) => {
+    const docId = event.params.id;
+    const afterSnap = event.data?.after;
+    if (!afterSnap) return;
+
+    const after = afterSnap.data() as LinkedInRawData;
+    const userId = after.userId;
+
+    if (after.processingStatus !== "processing" || after.feedbacks) return;
+
+    logger.info(`Processing LinkedIn analysis (v2 trigger) ${docId}`);
+
+    try {
+      await debitUserCredit(userId, LINKEDIN_ANALYSIS_PRICE);
+      const language = after.language || "pt-BR";
+      const photoAnalysis = analyzeProfilePicture(after);
+      const limitedData = {
+        name: after.name || "",
+        headline: after.headline || "",
+        about: after.about || "",
+        experience: Array.isArray(after.experience)
+          ? after.experience.slice(0, 5)
+          : [],
+        education: Array.isArray(after.education)
+          ? after.education.slice(0, 3)
+          : [],
+        skills: Array.isArray(after.skills) ? after.skills.slice(0, 20) : [],
+        languages: after.languages || [],
+        certifications: Array.isArray(after.courses)
+          ? after.courses.slice(0, 5)
+          : [],
+        hasProfilePicture: photoAnalysis.hasProfilePicture,
+        profilePictureUrl: after.profilePictureUrl || null,
+        recommendationsReceived: Array.isArray(after.recommendationsReceived)
+          ? after.recommendationsReceived.slice(0, 5)
+          : [],
+        recommendationsGiven: Array.isArray(after.recommendationsGiven)
+          ? after.recommendationsGiven.slice(0, 5)
+          : [],
+      };
+
+      const prompt = `Você é um especialista em RH focado em Linkedin. 
+      Responda na língua ${language || "pt-BR"}
+      Analise o perfil que tem esses dados: ${JSON.stringify(limitedData)}
+      Faça a análise desses items: name, headline, about, experience, education, skills, languages, courses, profilePicture, profilePictureUrl, recommendationsReceived, recommendationsGiven.
+      Traduza os items acima para o idioma ${
+        language || "pt-BR"
+      } e coloque a primeira letra maiúscula.
+      Tipos:
+      - LinkedInAnalysisFeedback { overallScore: number; items: LinkedInFeedbackItem[]; missingSections: string[]; generalRecommendations: string[]; quickWins: string[]; strategicChanges: string[];}
+      - LinkedInFeedbackItem { item: string; score: number; weight: number; weightedScore: number; feedback: string; suggestions: LinkedInFeedbackSuggestion[]; priority: "high" | "medium" | "low";}
+      Faça a análise do perfil e retorne uma estrutura JSON de acordo com esse tipo: LinkedInAnalysisFeedback
+      Os scores devem ser de 0 a 100, e os pesos devem ser de 0 a 1.
+      `;
+
+      if (!model) {
+        await afterSnap.ref.update({
+          processingStatus: "error",
+          processingError: "Modelo indisponível (falta GEMINI_API_KEY)",
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        return;
+      }
+
+      const timeoutPromise = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Timeout na geração")), 120000)
+      );
+
+      const result = (await Promise.race([
+        model.generateContent(prompt),
+        timeoutPromise,
+      ])) as GeminiResult;
+
+      const text = result.response.text();
+      let analysisResult: LinkedInAnalysisFeedback;
+      try {
+        analysisResult = JSON.parse(text);
+      } catch {
+        logger.error("Falha parse JSON", { docId, raw: text });
+        await afterSnap.ref.update({
+          processingStatus: "error",
+          processingError: "Resposta inválida do modelo",
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+        return;
+      }
+
+      await afterSnap.ref.update({
+        feedbacks: analysisResult,
+        feedbackGeneratedAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
+        processingStatus: "completed",
+        processingCompletedAt: FieldValue.serverTimestamp(),
+      });
+
+      logger.info(`Concluído ${docId}`);
+    } catch (error) {
+      logger.error(`Erro ${docId}`, error as Error);
+      await afterSnap.ref.update({
+        processingStatus: "error",
+        processingError: (error as Error).message || "Erro desconhecido",
+        updatedAt: FieldValue.serverTimestamp(),
+      });
+    }
+  }
+);
