@@ -1,8 +1,13 @@
+// src/processors/linkedin.ts
 import * as functions from "firebase-functions/v2";
 import { FieldValue } from "firebase-admin/firestore";
-import { model } from "../config/gemini";
-import { debitUserCredit } from "../utils/credit";
-import { LinkedInRawData, LinkedInAnalysisFeedback, GeminiResult } from "../types";
+import { debitUserCredit } from "../utils/credit.js";
+import {
+  LinkedInRawData,
+  LinkedInAnalysisFeedback,
+  GeminiResult,
+} from "../types/index.js";
+import { createModel, GEMINI_API_KEY } from "../config/gemini.js";
 
 const { logger, firestore } = functions;
 const { onDocumentWritten } = firestore;
@@ -20,21 +25,27 @@ function analyzeProfilePicture(linkedInData: LinkedInRawData) {
 }
 
 export const linkedinAnalysisProcessor = onDocumentWritten(
-  "linkedin-analysis/{id}",
+  {
+    document: "linkedin-analysis/{id}",
+    secrets: [GEMINI_API_KEY],
+    region: "southamerica-east1",
+  },
   async (event) => {
     const docId = event.params.id;
     const afterSnap = event.data?.after;
     if (!afterSnap) return;
 
     const after = afterSnap.data() as LinkedInRawData;
-    const userId = after.userId;
-
     if (after.processingStatus !== "processing" || after.feedbacks) return;
 
     logger.info(`Processing LinkedIn analysis (v2 trigger) ${docId}`);
 
     try {
-      await debitUserCredit(userId, LINKEDIN_ANALYSIS_PRICE);
+      await debitUserCredit(after.userId, LINKEDIN_ANALYSIS_PRICE);
+
+      const apiKey = GEMINI_API_KEY.value();
+      const model = createModel(apiKey);
+
       const language = after.language || "pt-BR";
       const photoAnalysis = analyzeProfilePicture(after);
       const limitedData = {
@@ -63,27 +74,14 @@ export const linkedinAnalysisProcessor = onDocumentWritten(
       };
 
       const prompt = `Você é um especialista em RH focado em Linkedin. 
-      Responda na língua ${language || "pt-BR"}
+      Responda na língua ${language}
       Analise o perfil que tem esses dados: ${JSON.stringify(limitedData)}
-      Faça a análise desses items: name, headline, about, experience, education, skills, languages, courses, profilePicture, profilePictureUrl, recommendationsReceived, recommendationsGiven.
-      Traduza os items acima para o idioma ${
-        language || "pt-BR"
-      } e coloque a primeira letra maiúscula.
+      Faça a análise desses itens: name, headline, about, experience, education, skills, languages, courses, profilePicture, profilePictureUrl, recommendationsReceived, recommendationsGiven.
+      Traduza os itens acima para o idioma ${language} e coloque a primeira letra maiúscula.
       Tipos:
       - LinkedInAnalysisFeedback { overallScore: number; items: LinkedInFeedbackItem[]; missingSections: string[]; generalRecommendations: string[]; quickWins: string[]; strategicChanges: string[];}
       - LinkedInFeedbackItem { item: string; score: number; weight: number; weightedScore: number; feedback: string; suggestions: LinkedInFeedbackSuggestion[]; priority: "high" | "medium" | "low";}
-      Faça a análise do perfil e retorne uma estrutura JSON de acordo com esse tipo: LinkedInAnalysisFeedback
-      Os scores devem ser de 0 a 100, e os pesos devem ser de 0 a 1.
-      `;
-
-      if (!model) {
-        await afterSnap.ref.update({
-          processingStatus: "error",
-          processingError: "Modelo indisponível (falta GEMINI_API_KEY)",
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        return;
-      }
+      Retorne JSON de acordo com LinkedInAnalysisFeedback. Scores 0..100, pesos 0..1.`;
 
       const timeoutPromise = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("Timeout na geração")), 120000)
@@ -93,6 +91,8 @@ export const linkedinAnalysisProcessor = onDocumentWritten(
         model.generateContent(prompt),
         timeoutPromise,
       ])) as GeminiResult;
+
+      logger.info(`LinkedIn analysis result: ${result.response.text()}`);
 
       const text = result.response.text();
       let analysisResult: LinkedInAnalysisFeedback;

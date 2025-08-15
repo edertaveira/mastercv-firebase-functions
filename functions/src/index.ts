@@ -1,16 +1,16 @@
-// Entry point do Firebase Functions: exporte aqui todas as funções que deseja publicar.
+// src/index.ts
+import { setGlobalOptions } from "firebase-functions/v2";
+import { initializeApp, getApps } from "firebase-admin/app";
 
-// Se a inicialização do Firebase Admin ainda não acontece em outro arquivo, descomente:
-// import * as admin from 'firebase-admin';
-// if (!admin.apps.length) admin.initializeApp();
+// Região default p/ todas as functions
+setGlobalOptions({ region: "southamerica-east1" });
 
-// Exports explícitos (adicione novos conforme criar):
-export { resumeAnalysisProcessor } from './processors/resume';
-export { linkedinAnalysisProcessor } from './processors/linkedin';
-export {
-  generateCvFromDescription,
-  generateCvForJob
-} from './processors/generateCv';
+// Garante Admin SDK inicializado assim que o codebase carrega
+if (!getApps().length) {
+  initializeApp(); // usa credenciais do ambiente da Function
+}
 
-// Exemplo para futuras funções:
-// export { outraFunction } from './processors/outraFunction';
+// exports depois disso
+export { resumeAnalysisProcessor } from "./processors/resume.js";
+export { linkedinAnalysisProcessor } from "./processors/linkedin.js";
+export { generateCvFromDescription, generateCvForJob } from "./processors/generateCv.js";

@@ -1,21 +1,20 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import * as functions from "firebase-functions/v2";
+import { defineSecret } from "firebase-functions/params";
 
-const { logger } = functions;
+export const GEMINI_API_KEY = defineSecret("GEMINI_API_KEY");
 
-const apiKey = process.env.GEMINI_API_KEY;
-if (!apiKey) {
-  logger.error("GEMINI_API_KEY ausente (defina secret antes do deploy).");
+export function createGenAI(apiKey: string) {
+  if (!apiKey) throw new Error("GEMINI_API_KEY ausente");
+  return new GoogleGenerativeAI(apiKey);
 }
 
-const genAI = apiKey ? new GoogleGenerativeAI(apiKey) : null;
-export const model = genAI
-  ? genAI.getGenerativeModel({
-      model: "gemini-1.5-pro",
-      generationConfig: {
-        responseMimeType: "application/json",
-        temperature: 0.7,
-        maxOutputTokens: 3000,
-      },
-    })
-  : null;
+export function createModel(apiKey: string) {
+  const client = createGenAI(apiKey);
+  return client.getGenerativeModel({
+    model: "gemini-1.5-pro-latest",
+    generationConfig: {
+      responseMimeType: "application/json",
+      temperature: 0.3
+    }
+  });
+}
