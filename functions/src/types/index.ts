@@ -1,3 +1,5 @@
+import { ItemType } from "./itemType.js";
+
 export interface LinkedInFeedbackItem {
   item: string;
   score: number;
@@ -38,17 +40,43 @@ export interface LinkedInRawData {
   feedbacks?: unknown;
 }
 
+export enum InterviewType {
+  TECHNICAL = "technical",
+  HR = "hr",
+  CULTURAL = "cultural",
+}
+
+interface JobDataProps {
+  position: string;
+  description: string;
+  interviewType: InterviewType;
+  language: string;
+  numQuestions: number;
+}
+
 export interface ResumeRawData {
   userId: string;
-  pdfBase64?: string;
-  mimeType?: string;
-  siteLanguage?: string;
-  jobDescription?: string;
+  pdf: {
+    base64?: string;
+    type?: string;
+    name: string;
+  };
+  type: ItemType.CV_ANALYSIS | ItemType.CV_JOB_ADEQUATION;
+  language?: string;
+  jobData?: {
+    description?: string;
+    position?: string;
+  };
   position?: string;
   analysisType?: "general" | "adequation";
-  generateNewCV?: boolean;
-  processingStatus?: string;
-  feedbacks?: unknown;
+  generateNewResume?: boolean;
+  cv: GeneratedCV;
+  cvGeneratedAt: string;
+  cvGenerationError: string | null;
+  status?: "running" | "ready" | "failed";
+  error: string | null;
+  feedbacks?: ResumeAnalysisFeedback;
+  analysisLevel?: "basic" | "advanced";
 }
 
 export interface GeneratedCV {
@@ -103,7 +131,11 @@ export interface ResumeAnalysisFeedback {
   strengths: string[];
   improvements: string[];
   resources: Array<{ title: string; url: string }>;
-  skillsRadar?: Array<{ skill: string; requiredScore: number; resumeScore: number }>;
+  skillsRadar?: Array<{
+    skill: string;
+    requiredScore: number;
+    resumeScore: number;
+  }>;
 }
 
 export type GeminiResult = { response: { text: () => string } };

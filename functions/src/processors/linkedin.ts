@@ -8,6 +8,7 @@ import {
   GeminiResult,
 } from "../types/index.js";
 import { createModel, GEMINI_API_KEY } from "../config/gemini.js";
+import { ItemType } from "../types/itemType.js";
 
 const { logger, firestore } = functions;
 const { onDocumentWritten } = firestore;
@@ -41,8 +42,6 @@ export const linkedinAnalysisProcessor = onDocumentWritten(
     logger.info(`Processing LinkedIn analysis (v2 trigger) ${docId}`);
 
     try {
-      await debitUserCredit(after.userId, LINKEDIN_ANALYSIS_PRICE);
-
       const apiKey = GEMINI_API_KEY.value();
       const model = createModel(apiKey);
 
@@ -114,6 +113,11 @@ export const linkedinAnalysisProcessor = onDocumentWritten(
         updatedAt: FieldValue.serverTimestamp(),
         processingStatus: "completed",
         processingCompletedAt: FieldValue.serverTimestamp(),
+      });
+
+      await debitUserCredit(after.userId, LINKEDIN_ANALYSIS_PRICE, {
+        description: "Análise de perfil do LinkedIn",
+        type: ItemType.LINKEDIN_ANALYSIS,
       });
 
       logger.info(`Concluído ${docId}`);
